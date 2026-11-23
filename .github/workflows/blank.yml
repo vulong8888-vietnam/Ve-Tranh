@@ -1,0 +1,44 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:        # cho phep bam nut "Run workflow" thu cong
+
+permissions:
+  contents: write           # can de dinh kem APK vao Release khi gan tag
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Lay ma nguon
+        uses: actions/checkout@v4
+
+      - name: Cai JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Cai Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+
+      - name: Build APK (debug)
+        run: gradle assembleDebug --stacktrace
+
+      - name: Tai APK len mục Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: VeTranh-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+
+      - name: Dinh kem APK vao Release (khi gan tag v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/build/outputs/apk/debug/*.apk
