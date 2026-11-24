@@ -16,6 +16,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -41,11 +46,14 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -82,6 +90,7 @@ import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.IntSize
@@ -451,6 +460,10 @@ fun DrawingScreen() {
     var currentPts by remember { mutableStateOf<List<Pt>>(emptyList()) }
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
 
+    // Thanh cong cu tu an khi bat dau ve; bam nut "Cong cu" de hien lai
+    var barsVisible by remember { mutableStateOf(true) }
+    var showPaper by remember { mutableStateOf(false) }
+
     // To giay: toa do net ve tinh bang mm
     var paper by remember { mutableStateOf(PaperSize.A4) }
     var landscape by remember { mutableStateOf(false) }
@@ -465,7 +478,7 @@ fun DrawingScreen() {
     var viewOffset by remember { mutableStateOf(Offset.Zero) }
     var fitScale by remember { mutableFloatStateOf(1f) }
 
-    // Anh xuat ra: toi da 300 dpi, nhung canh dai khong qua 4096 px de khong het bo nho
+    // Anh xuat ra: toi da 300 dpi, canh dai khong qua 4096 px de khong het bo nho
     val exportPpm = min(300f / 25.4f, 4096f / max(pageW, pageH))
     val exportW = (pageW * exportPpm).toInt()
     val exportH = (pageH * exportPpm).toInt()
@@ -499,16 +512,17 @@ fun DrawingScreen() {
         hue = hsv[0] / 360f; sat = hsv[1]; value = hsv[2]
     }
 
-    // Dua ca to giay vua khung nhin
+    // Dua ca to giay vua khung nhin (chua cho cho thanh cong cu o tren)
+    val topPx = with(density) { 52.dp.toPx() }
     fun fitView() {
         if (canvasSize.width == 0 || canvasSize.height == 0) return
-        val margin = 24f
-        val sc = min((canvasSize.width - margin) / pageW, (canvasSize.height - margin) / pageH)
+        val availH = canvasSize.height - topPx - 12f
+        val sc = min((canvasSize.width - 24f) / pageW, availH / pageH)
         fitScale = sc
         viewScale = sc
         viewOffset = Offset(
             (canvasSize.width - pageW * sc) / 2f,
-            (canvasSize.height - pageH * sc) / 2f
+            topPx + (availH - pageH * sc) / 2f
         )
     }
     LaunchedEffect(canvasSize, paper, landscape) { fitView() }
@@ -582,118 +596,94 @@ fun DrawingScreen() {
         }
     }
 
-    Column(modifier = Modifier
+    // Canvas phu kin man hinh; thanh cong cu la lop noi ben tren nen to giay khong bi nhay khi an/hien
+    Box(modifier = Modifier
         .fillMaxSize()
         .safeDrawingPadding()) {
 
-        // Thanh tren
-        Row(
+        Canvas(
             modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            ToolButton("Giấy ${paper.label}", true) {
-                panel = if (panel == Panel.PAPER) Panel.NONE else Panel.PAPER
-            }
-            ToolButton(if (gridOn) "Ô kẻ: Bật" else "Ô kẻ: Tắt", true) { gridOn = !gridOn }
-            ToolButton("Undo", strokes.isNotEmpty()) {
-                if (strokes.isNotEmpty()) redoStack.add(strokes.removeAt(strokes.lastIndex))
-            }
-            ToolButton("Redo", redoStack.isNotEmpty()) {
-                if (redoStack.isNotEmpty()) strokes.add(redoStack.removeAt(redoStack.lastIndex))
-            }
-            ToolButton("Xóa hết", true) { strokes.clear(); redoStack.clear() }
-            ToolButton("Vừa khung", true) { fitView() }
-            ToolButton("Lưu ảnh", true) { requestSave(false) }
-            ToolButton("Chia sẻ", true) { requestSave(true) }
-        }
+                .fillMaxSize()
+                .background(Color(0xFF9E9E9E))
+                .clipToBounds()
+                .onSizeChanged { canvasSize = it }
+                .pointerInput(brush, color, brushSize, opacity) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        down.consume()
+                        barsVisible = false // bat dau ve => an thanh cong cu
+                        fun toPage(p: Offset) = (p - viewOffset) / viewScale
+                        fun pressureOf(type: PointerType, p: Float) =
+                            if (type == PointerType.Stylus) p else 1f
 
-        // Vung ve: nen xam, to giay trang o giua, hai ngon de thu phong / keo trang
-        Box(modifier = Modifier
-            .weight(1f)
-            .fillMaxWidth()) {
-            Canvas(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color(0xFF9E9E9E))
-                    .clipToBounds()
-                    .onSizeChanged { canvasSize = it }
-                    .pointerInput(brush, color, brushSize, opacity) {
-                        awaitEachGesture {
-                            val down = awaitFirstDown(requireUnconsumed = false)
-                            down.consume()
-                            fun toPage(p: Offset) = (p - viewOffset) / viewScale
-                            fun pressureOf(type: PointerType, p: Float) =
-                                if (type == PointerType.Stylus) p else 1f
+                        val list = ArrayList<Pt>()
+                        var lastScreen = down.position
+                        var multi = false
+                        list.add(Pt(toPage(down.position), pressureOf(down.type, down.pressure), down.uptimeMillis))
+                        currentPts = list.toList()
 
-                            val list = ArrayList<Pt>()
-                            var lastScreen = down.position
-                            var multi = false
-                            list.add(Pt(toPage(down.position), pressureOf(down.type, down.pressure), down.uptimeMillis))
-                            currentPts = list.toList()
-
-                            while (true) {
-                                val event = awaitPointerEvent()
-                                val pressed = event.changes.filter { it.pressed }
-                                if (pressed.isEmpty()) break
-                                if (pressed.size >= 2) {
-                                    // Hai ngon: huy net dang ve, chuyen sang thu phong / di chuyen
-                                    if (!multi) {
-                                        multi = true
-                                        list.clear()
-                                        currentPts = emptyList()
-                                    }
-                                    val zoom = event.calculateZoom()
-                                    val pan = event.calculatePan()
-                                    val centroid = event.calculateCentroid()
-                                    val newScale = (viewScale * zoom).coerceIn(fitScale * 0.5f, 80f)
-                                    val k = newScale / viewScale
-                                    viewOffset = centroid - (centroid - viewOffset) * k + pan
-                                    viewScale = newScale
-                                    event.changes.forEach { it.consume() }
-                                } else if (!multi) {
-                                    val ch = pressed[0]
-                                    if ((ch.position - lastScreen).getDistance() >= 2f) {
-                                        lastScreen = ch.position
-                                        list.add(Pt(toPage(ch.position), pressureOf(ch.type, ch.pressure), ch.uptimeMillis))
-                                        currentPts = list.toList()
-                                    }
-                                    ch.consume()
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val pressed = event.changes.filter { it.pressed }
+                            if (pressed.isEmpty()) break
+                            if (pressed.size >= 2) {
+                                // Hai ngon: huy net dang ve, chuyen sang thu phong / di chuyen
+                                if (!multi) {
+                                    multi = true
+                                    list.clear()
+                                    currentPts = emptyList()
                                 }
+                                val zoom = event.calculateZoom()
+                                val pan = event.calculatePan()
+                                val centroid = event.calculateCentroid()
+                                val newScale = (viewScale * zoom).coerceIn(fitScale * 0.5f, 80f)
+                                val k = newScale / viewScale
+                                viewOffset = centroid - (centroid - viewOffset) * k + pan
+                                viewScale = newScale
+                                event.changes.forEach { it.consume() }
+                            } else if (!multi) {
+                                val ch = pressed[0]
+                                if ((ch.position - lastScreen).getDistance() >= 2f) {
+                                    lastScreen = ch.position
+                                    list.add(Pt(toPage(ch.position), pressureOf(ch.type, ch.pressure), ch.uptimeMillis))
+                                    currentPts = list.toList()
+                                }
+                                ch.consume()
                             }
-                            if (!multi && list.isNotEmpty()) {
-                                strokes.add(DrawStroke(list.toList(), brush, color, brushSize, opacity, viewScale))
-                                redoStack.clear()
-                            }
-                            currentPts = emptyList()
                         }
-                    }
-            ) {
-                val pw = pageW * viewScale
-                val ph = pageH * viewScale
-                drawRect(Color(0x33000000), topLeft = viewOffset + Offset(5f, 5f), size = Size(pw, ph))
-                drawRect(Color.White, topLeft = viewOffset, size = Size(pw, ph))
-                withTransform({
-                    translate(viewOffset.x, viewOffset.y)
-                    scale(viewScale, viewScale, Offset.Zero)
-                    clipRect(0f, 0f, pageW, pageH)
-                }) {
-                    if (gridOn) drawGrid(pageW, pageH, gridMm, viewScale, 1f)
-                    strokes.forEach { drawDrawStroke(it, viewScale) }
-                    if (currentPts.isNotEmpty()) {
-                        drawDrawStroke(
-                            DrawStroke(currentPts, brush, color, brushSize, opacity, viewScale),
-                            viewScale
-                        )
+                        if (!multi && list.isNotEmpty()) {
+                            strokes.add(DrawStroke(list.toList(), brush, color, brushSize, opacity, viewScale))
+                            redoStack.clear()
+                        }
+                        currentPts = emptyList()
                     }
                 }
+        ) {
+            val pw = pageW * viewScale
+            val ph = pageH * viewScale
+            drawRect(Color(0x33000000), topLeft = viewOffset + Offset(5f, 5f), size = Size(pw, ph))
+            drawRect(Color.White, topLeft = viewOffset, size = Size(pw, ph))
+            withTransform({
+                translate(viewOffset.x, viewOffset.y)
+                scale(viewScale, viewScale, Offset.Zero)
+                clipRect(0f, 0f, pageW, pageH)
+            }) {
+                if (gridOn) drawGrid(pageW, pageH, gridMm, viewScale, 1f)
+                strokes.forEach { drawDrawStroke(it, viewScale) }
+                if (currentPts.isNotEmpty()) {
+                    drawDrawStroke(
+                        DrawStroke(currentPts, brush, color, brushSize, opacity, viewScale),
+                        viewScale
+                    )
+                }
             }
+        }
 
+        // Khi thanh cong cu dang an: hien nhan thong tin nho + nut goi lai
+        if (!barsVisible) {
             val zoomPct = (viewScale / (density.density * 160f / 25.4f) * 100f).toInt()
             Text(
-                "${paper.label} ${if (landscape) "ngang" else "dọc"} · ${pageW.toInt()}×${pageH.toInt()} mm · $zoomPct%",
+                "${paper.label} · $zoomPct%",
                 fontSize = 11.sp,
                 color = Color.White,
                 modifier = Modifier
@@ -702,220 +692,294 @@ fun DrawingScreen() {
                     .background(Color(0x99000000), RoundedCornerShape(6.dp))
                     .padding(horizontal = 8.dp, vertical = 3.dp)
             )
+            Text(
+                "Công cụ",
+                fontSize = 12.sp,
+                color = Color.White,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0x99000000))
+                    .clickable { barsVisible = true }
+                    .padding(horizontal = 12.dp, vertical = 7.dp)
+            )
         }
 
-        // Bang dieu khien (cuon doc duoc neu man hinh nho)
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 300.dp)
-                .background(Color(0xFFF5F5F5))
-                .verticalScroll(rememberScrollState())
-                .padding(vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+        // Thanh tren (gon, mot hang)
+        AnimatedVisibility(
+            visible = barsVisible,
+            modifier = Modifier.align(Alignment.TopCenter),
+            enter = fadeIn() + slideInVertically { -it },
+            exit = fadeOut() + slideOutVertically { -it }
         ) {
-            // Chon kho giay
-            if (panel == Panel.PAPER) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        PaperSize.values().forEach { p ->
-                            Chip(p.label, paper == p) { paper = p }
-                        }
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Chip("Giấy dọc", !landscape) { landscape = false }
-                        Chip("Giấy ngang", landscape) { landscape = true }
-                    }
-                    Row(
-                        modifier = Modifier.horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Chip(if (gridOn) "Ô kẻ: Bật" else "Ô kẻ: Tắt", gridOn) { gridOn = !gridOn }
-                        listOf(5f, 10f, 20f).forEach { g ->
-                            Chip("${g.toInt()} mm", gridOn && gridMm == g) { gridMm = g; gridOn = true }
-                        }
-                        Chip("Xuất kèm ô kẻ", gridExport) { gridExport = !gridExport }
-                    }
-                    Text("${paper.label}: ${pageW.toInt()} × ${pageH.toInt()} mm", fontSize = 14.sp)
-                    Text(
-                        "Ảnh xuất ra: $exportW × $exportH px (khoảng $exportDpi dpi)",
-                        fontSize = 12.sp, color = Color.DarkGray
-                    )
-                    Text(
-                        "Dùng hai ngón để thu phóng và di chuyển tờ giấy. Cỡ bút tính bằng mm theo kích thước thật. " +
-                            "Khi đổi sang khổ nhỏ hơn hoặc đổi chiều giấy, nét nằm ngoài trang sẽ bị cắt khi lưu.",
-                        fontSize = 12.sp, color = Color.DarkGray
-                    )
-                }
-            }
-
             Row(
                 modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xEEFFFFFF))
                     .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                BrushType.values().forEach { b ->
-                    Chip(b.label, brush == b) { brush = b }
-                }
-            }
-
-            // Hang mau
-            Row(
-                modifier = Modifier
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    .padding(horizontal = 6.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .background(
-                            Brush.sweepGradient(
-                                listOf(
-                                    Color.Red, Color.Yellow, Color.Green,
-                                    Color.Cyan, Color.Blue, Color.Magenta, Color.Red
-                                )
-                            )
-                        )
-                        .border(if (panel == Panel.PICKER) 3.dp else 1.dp, Color.DarkGray, CircleShape)
-                        .clickable { panel = if (panel == Panel.PICKER) Panel.NONE else Panel.PICKER }
-                )
-                Chip("Pha màu", panel == Panel.MIXER) {
-                    panel = if (panel == Panel.MIXER) Panel.NONE else Panel.MIXER
+                ToolButton("Giấy ${paper.label}", true) { showPaper = true }
+                ToolButton("Ô kẻ", true, selected = gridOn) { gridOn = !gridOn }
+                ToolButton("↩", strokes.isNotEmpty()) {
+                    if (strokes.isNotEmpty()) redoStack.add(strokes.removeAt(strokes.lastIndex))
                 }
-                customColors.forEach { c ->
-                    ColorDot(c, selectedPreset == c && panel != Panel.MIXER) { onPickColor(c) }
+                ToolButton("↪", redoStack.isNotEmpty()) {
+                    if (redoStack.isNotEmpty()) strokes.add(redoStack.removeAt(redoStack.lastIndex))
                 }
-                presetColors.forEach { c ->
-                    ColorDot(c, selectedPreset == c && panel != Panel.MIXER) { onPickColor(c) }
-                }
+                ToolButton("Xóa", true) { strokes.clear(); redoStack.clear() }
+                ToolButton("Vừa", true) { fitView() }
+                ToolButton("Lưu", true) { requestSave(false) }
+                ToolButton("Gửi", true) { requestSave(true) }
+                ToolButton("Ẩn", true) { barsVisible = false }
             }
+        }
 
-            // Bang chon mau HSV
-            if (panel == Panel.PICKER) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+        // Bang dieu khien duoi (cuon doc duoc neu man hinh nho)
+        AnimatedVisibility(
+            visible = barsVisible,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = fadeIn() + slideInVertically { it },
+            exit = fadeOut() + slideOutVertically { it }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 260.dp)
+                    .background(Color(0xF2F5F5F5))
+                    .verticalScroll(rememberScrollState())
+                    .padding(vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    val h = hue * 360f
-                    val vv = value.coerceAtLeast(0.3f)
-                    GradientBar(hue, (0..6).map { Color.hsv(it * 60f, 1f, 1f) }) {
-                        hue = it; selectedPreset = null
+                    BrushType.values().forEach { b ->
+                        Chip(b.label, brush == b) { brush = b }
                     }
-                    GradientBar(sat, listOf(Color.hsv(h, 0f, vv), Color.hsv(h, 1f, vv))) {
-                        sat = it; selectedPreset = null
-                    }
-                    GradientBar(value, listOf(Color.Black, Color.hsv(h, sat, 1f))) {
-                        value = it; selectedPreset = null
-                    }
+                }
+
+                // Hang mau
+                Row(
+                    modifier = Modifier
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .height(24.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(color)
-                            .border(1.dp, Color.LightGray, RoundedCornerShape(12.dp))
+                            .size(32.dp)
+                            .clip(CircleShape)
+                            .background(
+                                Brush.sweepGradient(
+                                    listOf(
+                                        Color.Red, Color.Yellow, Color.Green,
+                                        Color.Cyan, Color.Blue, Color.Magenta, Color.Red
+                                    )
+                                )
+                            )
+                            .border(if (panel == Panel.PICKER) 3.dp else 1.dp, Color.DarkGray, CircleShape)
+                            .clickable { panel = if (panel == Panel.PICKER) Panel.NONE else Panel.PICKER }
                     )
+                    Chip("Pha màu", panel == Panel.MIXER) {
+                        panel = if (panel == Panel.MIXER) Panel.NONE else Panel.MIXER
+                    }
+                    customColors.forEach { c ->
+                        ColorDot(c, selectedPreset == c && panel != Panel.MIXER) { onPickColor(c) }
+                    }
+                    presetColors.forEach { c ->
+                        ColorDot(c, selectedPreset == c && panel != Panel.MIXER) { onPickColor(c) }
+                    }
                 }
-            }
 
-            // Bang pha mau
-            if (panel == Panel.MIXER) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                // Bang chon mau HSV
+                if (panel == Panel.PICKER) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        val h = hue * 360f
+                        val vv = value.coerceAtLeast(0.3f)
+                        GradientBar(hue, (0..6).map { Color.hsv(it * 60f, 1f, 1f) }) {
+                            hue = it; selectedPreset = null
+                        }
+                        GradientBar(sat, listOf(Color.hsv(h, 0f, vv), Color.hsv(h, 1f, vv))) {
+                            sat = it; selectedPreset = null
+                        }
+                        GradientBar(value, listOf(Color.Black, Color.hsv(h, sat, 1f))) {
+                            value = it; selectedPreset = null
+                        }
+                    }
+                }
+
+                // Bang pha mau (gon)
+                if (panel == Panel.MIXER) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        Text("Chạm A hoặc B, rồi chọn màu ở hàng màu", fontSize = 11.sp, color = Color.Gray)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            MixSwatch(mixA, "A", mixTarget == 0) { mixTarget = 0 }
+                            Text("+", fontSize = 13.sp)
+                            MixSwatch(mixB, "B", mixTarget == 1) { mixTarget = 1 }
+                            Text("=", fontSize = 13.sp)
+                            MixSwatch(mixResult, "", false)
+                            Text(hexOf(mixResult), fontSize = 12.sp)
+                            Chip(if (mixPigment) "Màu sơn" else "RGB", true) { mixPigment = !mixPigment }
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("A", fontSize = 12.sp)
+                            Slider(value = mixT, onValueChange = { mixT = it }, modifier = Modifier.weight(1f))
+                            Text("B", fontSize = 12.sp)
+                        }
+                        Text(recipeText(mixT), fontSize = 12.sp)
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            for (i in 0..6) {
+                                val t = i / 6f
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(24.dp)
+                                        .background(mixColors(mixA, mixB, t, mixPigment))
+                                        .clickable { mixT = t }
+                                )
+                            }
+                        }
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            ToolButton("Lấy màu vẽ", true) { if (mixTarget == 0) mixA = color else mixB = color }
+                            ToolButton("Dùng màu này", true) {
+                                setDrawColor(mixResult)
+                                selectedPreset = null
+                                if (brush == BrushType.ERASER) brush = BrushType.PEN
+                                panel = Panel.NONE
+                            }
+                            ToolButton("+ Bảng màu", true) {
+                                if (mixResult !in customColors) customColors.add(0, mixResult)
+                            }
+                        }
+                    }
+                }
+
+                // Co but va do dam tren cung mot hang
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        "Chạm ô A hoặc B, rồi chọn màu ở hàng màu phía trên",
-                        fontSize = 12.sp, color = Color.DarkGray
+                        "Cỡ " + (if (brushSize < 10f) String.format("%.1f", brushSize) else brushSize.toInt().toString()) + "mm",
+                        fontSize = 12.sp
                     )
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        MixSwatch(mixA, "A", mixTarget == 0) { mixTarget = 0 }
-                        Text("+")
-                        MixSwatch(mixB, "B", mixTarget == 1) { mixTarget = 1 }
-                        Text("=")
-                        MixSwatch(mixResult, "", false)
-                        Text(hexOf(mixResult), fontSize = 13.sp)
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Chip("Màu sơn", mixPigment) { mixPigment = true }
-                        Chip("Pha đều RGB", !mixPigment) { mixPigment = false }
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("A", modifier = Modifier.padding(end = 8.dp))
-                        Slider(value = mixT, onValueChange = { mixT = it }, modifier = Modifier.weight(1f))
-                        Text("B", modifier = Modifier.padding(start = 8.dp))
-                    }
-                    Text(recipeText(mixT), fontSize = 13.sp)
-                    Row(modifier = Modifier.fillMaxWidth()) {
-                        for (i in 0..6) {
-                            val t = i / 6f
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(32.dp)
-                                    .background(mixColors(mixA, mixB, t, mixPigment))
-                                    .clickable { mixT = t }
-                            )
-                        }
-                    }
-                    Row(
-                        modifier = Modifier.horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        ToolButton("Lấy màu đang vẽ", true) { if (mixTarget == 0) mixA = color else mixB = color }
-                        ToolButton("Dùng màu này", true) {
-                            setDrawColor(mixResult)
-                            selectedPreset = null
-                            if (brush == BrushType.ERASER) brush = BrushType.PEN
-                            panel = Panel.NONE
-                        }
-                        ToolButton("Thêm vào bảng màu", true) {
-                            if (mixResult !in customColors) customColors.add(0, mixResult)
-                        }
-                    }
+                    Slider(value = sizeT, onValueChange = { sizeT = it }, modifier = Modifier.weight(1f))
+                    Text("Đậm ${(opacity * 100).toInt()}%", fontSize = 12.sp)
+                    Slider(
+                        value = opacity, onValueChange = { opacity = it },
+                        valueRange = 0.1f..1f, modifier = Modifier.weight(1f)
+                    )
                 }
             }
+        }
 
-            Row(modifier = Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "Cỡ: " + (if (brushSize < 10f) String.format("%.1f", brushSize) else brushSize.toInt().toString()) + " mm",
-                    modifier = Modifier.padding(end = 8.dp)
-                )
-                Slider(value = sizeT, onValueChange = { sizeT = it }, modifier = Modifier.weight(1f))
-            }
-            Row(modifier = Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Đậm: ${(opacity * 100).toInt()}%", modifier = Modifier.padding(end = 8.dp))
-                Slider(value = opacity, onValueChange = { opacity = it },
-                    valueRange = 0.1f..1f, modifier = Modifier.weight(1f))
-            }
+        // Hop thoai chon kho giay: liet ke ro A4, A3, A2, A1, A0
+        if (showPaper) {
+            AlertDialog(
+                onDismissRequest = { showPaper = false },
+                confirmButton = { TextButton(onClick = { showPaper = false }) { Text("Xong") } },
+                title = { Text("Khổ giấy") },
+                text = {
+                    Column(
+                        modifier = Modifier.verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        PaperSize.values().forEach { p ->
+                            val sel = p == paper
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(if (sel) Color(0xFFE3F2FD) else Color(0xFFF5F5F5))
+                                    .border(
+                                        if (sel) 2.dp else 0.dp,
+                                        if (sel) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                        RoundedCornerShape(10.dp)
+                                    )
+                                    .clickable { paper = p }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(p.label, fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.width(48.dp))
+                                Text("${p.wMm.toInt()} × ${p.hMm.toInt()} mm", modifier = Modifier.weight(1f))
+                                if (sel) Text("✓", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Chip("Giấy dọc", !landscape) { landscape = false }
+                            Chip("Giấy ngang", landscape) { landscape = true }
+                        }
+                        Text("Ô kẻ", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Chip("Tắt", !gridOn) { gridOn = false }
+                            listOf(5f, 10f, 20f).forEach { g ->
+                                Chip("${g.toInt()} mm", gridOn && gridMm == g) { gridMm = g; gridOn = true }
+                            }
+                            Chip("Xuất kèm", gridExport) { gridExport = !gridExport }
+                        }
+                        Text(
+                            "Ảnh xuất ra: $exportW × $exportH px (khoảng $exportDpi dpi)",
+                            fontSize = 12.sp, color = Color.DarkGray
+                        )
+                        Text(
+                            "Dùng hai ngón để thu phóng. Đổi sang khổ nhỏ hơn thì nét ngoài trang bị cắt khi lưu.",
+                            fontSize = 12.sp, color = Color.DarkGray
+                        )
+                    }
+                }
+            )
         }
     }
 }
 
 @Composable
-fun ToolButton(text: String, enabled: Boolean, onClick: () -> Unit) {
-    Button(
-        onClick = onClick,
-        enabled = enabled,
-        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
-    ) { Text(text) }
+fun ToolButton(text: String, enabled: Boolean, selected: Boolean = false, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .height(32.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(
+                when {
+                    !enabled -> Color(0xFFBDBDBD)
+                    selected -> Color(0xFF1A237E)
+                    else -> MaterialTheme.colorScheme.primary
+                }
+            )
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 11.dp),
+        contentAlignment = Alignment.Center
+    ) { Text(text, color = Color.White, fontSize = 12.sp) }
 }
 
 @Composable
 fun ColorDot(color: Color, selected: Boolean, onClick: () -> Unit) {
     Box(
         modifier = Modifier
-            .size(36.dp)
+            .size(32.dp)
             .clip(CircleShape)
             .background(color)
             .border(
@@ -931,21 +995,21 @@ fun ColorDot(color: Color, selected: Boolean, onClick: () -> Unit) {
 fun MixSwatch(color: Color, label: String, active: Boolean, onClick: (() -> Unit)? = null) {
     Box(
         modifier = Modifier
-            .size(52.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .size(40.dp)
+            .clip(RoundedCornerShape(8.dp))
             .background(color)
             .border(
                 if (active) 3.dp else 1.dp,
                 if (active) Color.DarkGray else Color.LightGray,
-                RoundedCornerShape(10.dp)
+                RoundedCornerShape(8.dp)
             )
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
         contentAlignment = Alignment.BottomEnd
     ) {
         Text(
-            label, fontSize = 12.sp,
+            label, fontSize = 11.sp,
             color = if (color.luminance() > 0.5f) Color.Black else Color.White,
-            modifier = Modifier.padding(5.dp)
+            modifier = Modifier.padding(4.dp)
         )
     }
 }
@@ -954,12 +1018,12 @@ fun MixSwatch(color: Color, label: String, active: Boolean, onClick: (() -> Unit
 fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(16.dp))
             .background(if (selected) MaterialTheme.colorScheme.primary else Color(0xFFE0E0E0))
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 8.dp)
+            .padding(horizontal = 12.dp, vertical = 6.dp)
     ) {
-        Text(text, color = if (selected) Color.White else Color.Black)
+        Text(text, color = if (selected) Color.White else Color.Black, fontSize = 13.sp)
     }
 }
 
